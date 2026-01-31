@@ -1,0 +1,487 @@
+import os
+import json
+import logging
+import time
+
+logger = logging.getLogger(__name__)
+
+# =========================
+# GEMINI API SETUP
+# =========================
+
+gemini_model = None
+_models_loaded = False
+
+
+def _load_gemini():
+    """Initialize Gemini API"""
+    global gemini_model, _models_loaded
+    
+    if _models_loaded:
+        return True
+    
+    try:
+        import google.generativeai as genai
+        
+        logger.info("[LOADING] Initializing Google Gemini API...")
+        start_time = time.time()
+        
+        # Get API key from environment
+        gemini_api_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_api_key:
+            logger.error("GEMINI_API_KEY not found in environment variables!")
+            return False
+        
+        # Configure Gemini API
+        genai.configure(api_key=gemini_api_key)
+        
+        # Initialize Gemini model (using gemini-2.0-flash for fast responses)
+        gemini_model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.4,
+                "top_p": 0.9,
+                "top_k": 40,
+                "max_output_tokens": 500,
+            },
+            safety_settings=[
+                {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+            ]
+        )
+        
+        _models_loaded = True
+        load_time = time.time() - start_time
+        logger.info(f"[OK] Gemini API initialized successfully in {load_time:.2f}s")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize Gemini API: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return False
+
+
+# =========================
+# QUESTION TYPE DETECTION
+# =========================
+
+def is_medical_question(question):
+    """Detect question type - returns (is_medical, question_type)
+    question_type can be: 'medical', 'greeting', 'thanks', 'goodbye', 'identity', 'other'
+    """
+    q_lower = question.lower().strip()
+    
+    # ===== GREETINGS =====
+    greeting_patterns = [
+        'hello', 'hi', 'hey', 'greetings', 'howdy', 'sup',
+        'good morning', 'good afternoon', 'good evening', 'good night',
+        'how are you', 'how are ya', 'how are u', 'whats up', "what's up",
+        'how are things', 'how is it going', "how's it going", 'hru', 'u there',
+        'howdy partner', 'wassup', 'yo', 'what up', "what's new"
+    ]
+    for pattern in greeting_patterns:
+        if q_lower.startswith(pattern) or q_lower == pattern:
+            return True, 'greeting'
+    
+    # ===== THANKS & APPRECIATION =====
+    thanks_patterns = [
+        'thanks', 'thank you', 'thx', 'ty', 'appreciate', 'grateful', 'gratitude',
+        'thanks for', 'thank you for', 'much appreciated', 'very helpful', 
+        'so helpful', 'that helps', 'very kind', 'thank you so much', 'really appreciate'
+    ]
+    for pattern in thanks_patterns:
+        if pattern in q_lower:
+            return True, 'thanks'
+    
+    # ===== GOODBYE & FAREWELL =====
+    bye_patterns = [
+        'bye', 'goodbye', 'see you', 'take care', 'good night', 'farewell',
+        'bye bye', 'see ya', 'see you later', 'ttyl', 'catch you later',
+        'talk to you later', 'cya', 'signing off', 'gotta go', 'gotta run',
+        'talk soon', 'until later', 'farewell', 'cheerio', 'adios'
+    ]
+    for pattern in bye_patterns:
+        if pattern in q_lower:
+            return True, 'goodbye'
+    
+    # ===== IDENTITY & BOT INFO =====
+    identity_patterns = [
+        'what is your name', 'who are you', 'who made you', 'who created you',
+        'what can you do', 'tell me about you', 'tell me about yourself', 'what are you',
+        'what is medchat', 'who is medchat', 'are you a doctor', 'are you human',
+        'what is your purpose', 'what do you do', 'your purpose', 'your function',
+        'capabilities', 'what can you help with'
+    ]
+    for pattern in identity_patterns:
+        if pattern in q_lower:
+            return True, 'identity'
+    
+    # ===== NON-MEDICAL TOPICS TO REJECT =====
+    non_medical = [
+        'joke', 'funny', 'laugh', 'make me laugh', 'tell me a joke',
+        'weather', 'temperature', 'rain', 'sunny', 'cloudy',
+        'time', 'what time', 'current time', 'date', 'today date',
+        'news', 'latest', 'headlines', 'breaking news',
+        'sports', 'football', 'basketball', 'soccer', 'cricket',
+        'movie', 'film', 'watch', 'actor', 'actress',
+        'music', 'song', 'artist', 'band', 'concert',
+        'game', 'play', 'video game', 'gaming',
+        'politics', 'election', 'vote', 'president', 'minister',
+        'restaurant', 'food delivery', 'where to eat',
+        'travel', 'flight', 'hotel', 'booking',
+        'shopping', 'buy', 'purchase', 'price',
+        'tech support', 'password', 'account issue'
+    ]
+    for pattern in non_medical:
+        if pattern in q_lower:
+            return False, 'other'
+    
+    # ===== COMPREHENSIVE MEDICAL KEYWORDS =====
+    medical_keywords = [
+        # === GENERAL HEALTH ===
+        'symptom', 'disease', 'treatment', 'medicine', 'health', 'healthcare',
+        'doctor', 'physician', 'nurse', 'hospital', 'clinic', 'medical',
+        'condition', 'illness', 'sick', 'sickness', 'unwell', 'disorder',
+        'syndrome', 'diagnosis', 'patient', 'examination', 'prescription',
+        'vaccine', 'vaccination', 'immunization', 'injection', 'therapy',
+        'cure', 'heal', 'healing', 'recovery', 'recover', 'remedy',
+        'treatment', 'care', 'wellness', 'wellbeing', 'fitness',
+        
+        # === BODY PARTS (COMPREHENSIVE) ===
+        'pain', 'ache', 'head', 'stomach', 'chest', 'back', 'leg', 'arm',
+        'eye', 'ear', 'nose', 'throat', 'skin', 'bone', 'muscle', 'joint',
+        'brain', 'lung', 'lungs', 'liver', 'kidney', 'kidneys', 'heart',
+        'blood', 'vein', 'artery', 'nerve', 'spine', 'neck', 'shoulder',
+        'knee', 'foot', 'feet', 'hand', 'wrist', 'elbow', 'hip',
+        'tooth', 'teeth', 'mouth', 'tongue', 'lip', 'gum',
+        'hair', 'nail', 'fingernail', 'face', 'cheek', 'forehead',
+        'belly', 'abdomen', 'stomach', 'bowel', 'intestine', 'esophagus',
+        'pancreas', 'spleen', 'bladder', 'prostate', 'uterus', 'ovary',
+        
+        # === CONDITIONS & DISEASES ===
+        'fever', 'cold', 'flu', 'influenza', 'cough', 'coughing',
+        'headache', 'migraine', 'diabetes', 'cancer', 'tumor', 'tumour',
+        'high blood pressure', 'hypertension', 'low blood pressure',
+        'allergy', 'allergies', 'asthma', 'bronchitis', 'pneumonia',
+        'arthritis', 'osteoarthritis', 'rheumatoid', 'infection', 'viral',
+        'bacterial', 'fungal', 'inflammation', 'inflamed', 'inflammatory',
+        'virus', 'bacteria', 'covid', 'covid-19', 'corona', 'coronavirus',
+        'anemia', 'obesity', 'overweight', 'cholesterol', 'thyroid',
+        'depression', 'anxiety', 'stress', 'insomnia', 'sleep disorder',
+        'acne', 'eczema', 'psoriasis', 'dermatitis', 'rash',
+        'burn', 'wound', 'cut', 'fracture', 'broken bone', 'sprain', 'strain',
+        'stroke', 'heart attack', 'cardiac', 'ulcer', 'hernia',
+        'stone', 'cyst', 'polyp', 'abscess', 'swelling', 'lump', 'bump',
+        'heartburn', 'gerd', 'acid reflux', 'constipation', 'diarrhea',
+        'nausea', 'vomiting', 'vertigo', 'dizziness', 'fainting',
+        'seizure', 'epilepsy', 'parkinson', 'alzheimer', 'dementia',
+        'cancer', 'leukemia', 'lymphoma', 'melanoma', 'carcinoma',
+        
+        # === MEDICATIONS & TREATMENTS ===
+        'drug', 'medication', 'medicine', 'pill', 'tablet', 'capsule',
+        'injection', 'vaccine', 'antibiotic', 'antiviral', 'painkiller',
+        'aspirin', 'ibuprofen', 'paracetamol', 'acetaminophen', 'tylenol',
+        'vitamin', 'supplement', 'mineral', 'herb', 'herbal',
+        'dose', 'dosage', 'mg', 'ml', 'side effect', 'adverse',
+        'contraindication', 'allergy', 'intolerance', 'sensitivity',
+        'anesthetic', 'sedative', 'stimulant', 'depressant',
+        
+        # === PREGNANCY & REPRODUCTION ===
+        'pregnant', 'pregnancy', 'trimester', 'baby', 'newborn',
+        'infant', 'child', 'children', 'pediatric', 'adolescent',
+        'fetus', 'miscarriage', 'abortion', 'labor', 'delivery',
+        'postpartum', 'breastfeeding', 'nursing', 'contraception', 'birth control',
+        'menstrual', 'period', 'menstruation', 'menopausal', 'menopause',
+        'erectile', 'impotence', 'infertility', 'fertility',
+        
+        # === ELDERLY & GERIATRIC ===
+        'elderly', 'senior', 'aged', 'aging', 'age-related',
+        'geriatric', 'aging process', 'old age',
+        
+        # === LIFESTYLE & PREVENTION ===
+        'diet', 'nutrition', 'nutritional', 'exercise', 'workout',
+        'fitness', 'weight', 'bmi', 'weight management', 'weight loss',
+        'weight gain', 'smoking', 'smoke', 'tobacco', 'alcohol', 'drinking',
+        'substance abuse', 'addiction', 'sleep', 'sleeping', 'insomnia',
+        'stress management', 'mental health', 'wellness', 'prevention',
+        'hygiene', 'sanitation', 'quarantine', 'isolation',
+        
+        # === MENTAL HEALTH ===
+        'mental', 'psychiatric', 'psychology', 'depression', 'anxiety',
+        'panic', 'phobia', 'ocd', 'ptsd', 'bipolar', 'schizophrenia',
+        'psychosis', 'therapy', 'counseling', 'cognitive', 'behavioral',
+        'stress', 'burnout', 'trauma', 'emotional',
+        
+        # === SYMPTOMS & SIGNS ===
+        'symptom', 'sign', 'bleeding', 'bruise', 'bleed', 'swell', 'swelling',
+        'itch', 'itching', 'itchy', 'tingle', 'tingling', 'numb', 'numbness',
+        'paralysis', 'weakness', 'weak', 'fatigue', 'tired', 'exhaustion',
+        'dizziness', 'dizzy', 'faint', 'fainting', 'lightheaded',
+        'shortness of breath', 'breathless', 'suffocation', 'choked',
+        'tremor', 'shaking', 'fever', 'chills', 'sweating', 'perspiration',
+        
+        # === TESTS & PROCEDURES ===
+        'test', 'testing', 'scan', 'xray', 'x-ray', 'ct scan', 'mri',
+        'ultrasound', 'endoscopy', 'biopsy', 'blood test', 'urine test',
+        'surgery', 'surgical', 'operation', 'procedure', 'exam', 'examination',
+        'checkup', 'check-up', 'physical', 'blood pressure', 'pulse',
+        
+        # === SPECIALIZED MEDICAL FIELDS ===
+        'cardiology', 'cardiac', 'heart', 'dermatology', 'skin',
+        'neurology', 'nerve', 'brain', 'orthopedics', 'bone', 'joint',
+        'oncology', 'cancer', 'psychiatry', 'mental', 'pediatrics', 'children',
+        'obstetrics', 'pregnancy', 'urology', 'urinary', 'gastroenterology',
+        'digestive', 'pulmonology', 'lung', 'rheumatology', 'autoimmune',
+        
+        # === QUESTION PATTERNS FOR MEDICAL QUERIES ===
+        'how to treat', 'how to cure', 'how to manage', 'how to prevent',
+        'what is the treatment', 'what is the cure', 'what causes',
+        'why do i have', 'what should i do', 'should i see a doctor',
+        'when should i see', 'is it serious', 'is it dangerous', 'is it normal',
+        'can i', 'could i have', 'do i have', 'might i have',
+        'first aid', 'emergency', 'urgent', 'serious', 'severe',
+        'home remedy', 'natural remedy', 'alternative', 'holistic',
+        'ayurvedic', 'ayurveda', 'homeopathy', 'homeopathic',
+        'herbal', 'herb', 'supplement', 'vitamin'
+    ]
+    
+    for keyword in medical_keywords:
+        if keyword in q_lower:
+            return True, 'medical'
+    
+    # If question ends with ? and contains medical question starters
+    if question.endswith('?'):
+        question_starters = ['what', 'why', 'how', 'can', 'should', 'could', 'is', 'are', 'do', 'does', 'will', 'would', 'have', 'has']
+        for starter in question_starters:
+            if q_lower.startswith(starter + ' '):
+                # Check if it's reasonably long (suggests medical query)
+                if len(q_lower) > 10:
+                    return True, 'medical'
+    
+    return False, 'other'
+
+
+def get_greeting_response(question_type):
+    """Get appropriate response for greetings and non-medical questions"""
+    responses = {
+        'greeting': (
+            "Hello! 👋 Welcome to MedChat AI, your medical assistant powered by Google Gemini. "
+            "I'm here to help you with health-related questions and medical information.\n\n"
+            "I can assist you with:\n"
+            "• Understanding symptoms and diseases\n"
+            "• Explaining medical conditions\n"
+            "• Discussing treatment options\n"
+            "• Health tips and wellness advice\n"
+            "• When to see a doctor\n\n"
+            "What health question can I help you with today?"
+        ),
+        'thanks': (
+            "You're welcome! 😊 I'm glad I could help you. If you have any more health-related "
+            "questions or need further information, please don't hesitate to ask. Remember, I'm here "
+            "to provide educational information, but for serious medical concerns, please consult with "
+            "a qualified healthcare professional. Take care!"
+        ),
+        'goodbye': (
+            "Goodbye! 👋 Thank you for using MedChat AI. Remember to take care of your health and "
+            "wellness. If you have any health concerns in the future, feel free to come back anytime. "
+            "For urgent medical issues, please consult a healthcare professional immediately. "
+            "Stay healthy! 💙"
+        ),
+        'identity': (
+            "I'm MedChat AI, your personal medical assistant powered by Google Gemini AI. "
+            "I'm designed to provide reliable health information and medical guidance.\n\n"
+            "What I can help with:\n"
+            "✓ Medical information and health education\n"
+            "✓ Symptom explanations\n"
+            "✓ Treatment and remedy suggestions\n"
+            "✓ Health tips and prevention advice\n"
+            "✓ When to seek professional help\n\n"
+            "What I cannot do:\n"
+            "✗ Provide official diagnoses\n"
+            "✗ Replace professional medical consultation\n"
+            "✗ Prescribe medications\n\n"
+            "Feel free to ask any health-related question!"
+        ),
+        'other': (
+            "I'm MedChat AI, a medical information assistant. I specialize in health-related "
+            "questions and cannot help with non-medical topics like jokes, weather, news, or general chitchat.\n\n"
+            "However, if you have any health or medical questions, I'm here to help! "
+            "Ask me about symptoms, conditions, treatments, or any wellness-related topic."
+        )
+    }
+    return responses.get(question_type, responses['other'])
+
+
+def build_prompt(context, history, question):
+    """Build a prompt for Gemini API"""
+    # Build conversation history
+    history_text = ""
+    if history:
+        for msg in history[-3:]:  # Last 3 messages for context
+            role = "User" if msg.get("role") == "user" else "Assistant"
+            content = msg.get("content", "")[:200]
+            history_text += f"{role}: {content}\n"
+    
+    # Context from RAG
+    context_text = context[:1000] if context else ""
+    
+    # System prompt for medical assistant
+    system_prompt = """You are MedChat AI, a professional and helpful medical assistant. Your role is to:
+1. Provide accurate, helpful medical information
+2. Be empathetic and understanding
+3. Use clear, simple language that patients can understand
+4. Always recommend consulting a healthcare professional for serious concerns
+5. Never diagnose conditions definitively - provide educational information only
+
+Important guidelines:
+- Be concise but thorough
+- Use bullet points for symptoms/treatments when appropriate
+- Include relevant warnings or when to seek emergency care
+- End responses with appropriate medical disclaimers when needed"""
+
+    # Build the full prompt
+    if context_text:
+        prompt = f"""{system_prompt}
+
+Medical Reference Information:
+{context_text}
+
+{f"Previous Conversation:\\n{history_text}" if history_text else ""}
+
+User Question: {question}
+
+Please provide a helpful, accurate response:"""
+    else:
+        prompt = f"""{system_prompt}
+
+{f"Previous Conversation:\\n{history_text}" if history_text else ""}
+
+User Question: {question}
+
+Please provide a helpful, accurate response:"""
+    
+    return prompt.strip()
+
+
+def generate_answer(prompt, max_tokens=500, temperature=0.4):
+    """Generate answer using Google Gemini API with timeout handling"""
+    if not _load_models():
+        logger.error("Failed to load models")
+        return "Unable to process request. Please try again."
+    
+    if not gemini_model:
+        logger.error("Gemini model not initialized")
+        return "Unable to process request. Please try again."
+    
+    try:
+        import time
+        start_time = time.time()
+        
+        # Generate response using Gemini with timeout
+        try:
+            response = gemini_model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": temperature,
+                    "top_p": 0.9,
+                    "top_k": 40,
+                    "max_output_tokens": max_tokens,
+                }
+            )
+        except Exception as e:
+            if "429" in str(e) or "rate" in str(e).lower():
+                logger.warning(f"Rate limit hit: {e}")
+                return "The service is temporarily busy. Please try again in a moment."
+            raise
+        
+        # Extract text from response
+        if response and response.text:
+            answer = response.text.strip()
+        else:
+            # Check if response was blocked
+            if hasattr(response, 'prompt_feedback') and response.prompt_feedback:
+                logger.warning(f"Response blocked: {response.prompt_feedback}")
+                return "I cannot provide a response to this query. Please rephrase your question."
+            answer = "I couldn't generate a response. Please try rephrasing your question."
+        
+        generation_time = time.time() - start_time
+        logger.info(f"[OK] Response generated in {generation_time:.2f}s ({len(answer)} chars)")
+        
+        return answer
+        
+    except Exception as e:
+        logger.error(f"Error generating answer: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+        return "Error processing question. Please try again."
+
+
+def stream_answer(prompt, max_tokens=500):
+    """Stream answer generation for real-time response"""
+    if not _load_models():
+        logger.error("Failed to load models")
+        raise RuntimeError("Model not available. Please try again.")
+    
+    if not gemini_model:
+        logger.error("Gemini model not initialized")
+        raise RuntimeError("Model not available. Please try again.")
+    
+    try:
+        # Stream response using Gemini
+        response = gemini_model.generate_content(prompt, stream=True)
+        
+        for chunk in response:
+            if chunk.text:
+                yield f"data: {json.dumps({'token': chunk.text})}\n\n"
+        
+        # Signal completion
+        yield f"data: {json.dumps({'done': True})}\n\n"
+        
+    except Exception as e:
+        logger.error(f"Error streaming answer: {e}")
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+
+def generate_answer_fast(question, context="", history=None):
+    """All-in-one fast answer generation"""
+    prompt = build_prompt(context, history or [], question)
+    return generate_answer(prompt)
+
+
+# =========================
+# CHAT WITH GEMINI (Direct conversation)
+# =========================
+
+def chat_with_gemini(message, chat_history=None):
+    """Direct chat with Gemini for conversational responses"""
+    if not _load_models():
+        return "Unable to process request. Please try again."
+    
+    try:
+        # Create a chat session for multi-turn conversations
+        chat = gemini_model.start_chat(history=[])
+        
+        # Add previous messages to chat history
+        if chat_history:
+            for msg in chat_history[-5:]:  # Last 5 messages
+                role = msg.get("role", "user")
+                content = msg.get("content", "")
+                if role == "user":
+                    chat.history.append({"role": "user", "parts": [content]})
+                else:
+                    chat.history.append({"role": "model", "parts": [content]})
+        
+        # Send the new message
+        response = chat.send_message(message)
+        
+        return response.text.strip() if response.text else "I couldn't generate a response."
+        
+    except Exception as e:
+        logger.error(f"Error in chat_with_gemini: {e}")
+        return "Error processing message. Please try again."
+
+

@@ -1,0 +1,16 @@
+flask
+flask-cors
+flask-jwt-extended
+pymongo
+python-dotenv
+python-socketio
+python-socketio[client]
+requests
+
+# Groq API (free, fast LLM inference)
+groq
+
+# RAG / Vector Search
+faiss-cpu
+sentence-transformers
+numpy
