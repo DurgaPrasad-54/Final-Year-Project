@@ -224,9 +224,21 @@ if __name__ == "__main__":
     logger.info(f"Port: 5000")
     logger.info(f"Debug: True")
     logger.info("=" * 60)
-    
+
     # Start warmup immediately when running directly
     warmup_thread = threading.Thread(target=warmup_models, daemon=True)
     warmup_thread.start()
-    
-    app.run(debug=True, host="0.0.0.0", port=5000, threaded=True)
+
+    # Use waitress for production on Windows
+    import os
+    use_waitress = os.environ.get("USE_WAITRESS", "0") == "1"
+    try:
+        import waitress
+        if use_waitress:
+            logger.info("[INFO] Starting with Waitress WSGI server (Windows production mode)")
+            waitress.serve(app, host="0.0.0.0", port=5000)
+        else:
+            app.run(debug=True, host="0.0.0.0", port=5000, threaded=True)
+    except ImportError:
+        logger.warning("[WARN] Waitress not installed, falling back to Flask dev server.")
+        app.run(debug=True, host="0.0.0.0", port=5000, threaded=True)
