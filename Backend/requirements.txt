@@ -6,7 +6,7 @@ python-dotenv
 python-socketio
 python-socketio[client]
 requests
-
+bcrypt
 # Groq API (free, fast LLM inference)
 groq
 
