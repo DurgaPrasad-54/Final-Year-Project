@@ -122,7 +122,9 @@ def start_server():
         logger.info("📝 Logs: medchat.log")
         logger.info("\nPress Ctrl+C to stop\n")
         
-        app.run(debug=True, host="0.0.0.0", port=5000, use_reloader=False)
+        port = int(os.environ.get("PORT", 5000))
+        logger.info(f"\n🚀 Server starting on http://localhost:{port}")
+        app.run(debug=True, host="0.0.0.0", port=port, use_reloader=False)
         
     except Exception as e:
         logger.error(f"✗ Failed to start server: {e}")
