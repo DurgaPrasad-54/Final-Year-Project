@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const API_BASE_URL = "http://localhost:5000";
+const API_BASE_URL = "https://medchat-pjg2.onrender.com";
 // const API_BASE_URL = "https://final-year-project-19c0.onrender.com";
 
 const api = axios.create({
