@@ -21,6 +21,13 @@ class Config:
     FLASK_ENV = os.getenv("FLASK_ENV", "development")
     DEBUG = os.getenv("DEBUG", "True").lower() == "true"
     
+    # Session Configuration
+    SESSION_TYPE = "filesystem"
+    PERMANENT_SESSION_LIFETIME = timedelta(hours=24)
+    SESSION_COOKIE_SECURE = False  # Set to True in production with HTTPS
+    SESSION_COOKIE_HTTPONLY = True
+    SESSION_COOKIE_SAMESITE = "Lax"
+    
     # Server Configuration
     HOST = os.getenv("HOST", "0.0.0.0")
     PORT = int(os.getenv("PORT", 5000))

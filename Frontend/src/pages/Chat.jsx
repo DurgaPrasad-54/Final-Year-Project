@@ -3,9 +3,14 @@ import { useEffect, useState, useRef, useCallback } from "react";
 import api, { streamChatResponse } from "../api/axios";
 import Sidebar from "../components/Sidebar";
 import Message from "../components/Message";
-import { FaPaperPlane, FaSpinner, FaRobot } from "react-icons/fa";
+import { FaPaperPlane, FaSpinner, FaRobot, FaMicrophone } from "react-icons/fa";
 import { useTheme } from "../context/ThemeContext";
 import ReactMarkdown from "react-markdown";
+import {
+  initializeSpeechRecognition,
+  startListening,
+  stopListening,
+} from "../utils/voiceUtils";
 
 export default function Chat() {
   const { theme } = useTheme();
@@ -16,12 +21,24 @@ export default function Chat() {
   const [error, setError] = useState("");
   const [chatId, setChatId] = useState(null);
   const [streamingContent, setStreamingContent] = useState("");
+  const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef(null);
   const sidebarRef = useRef(null);
+  const recognitionRef = useRef(null);
 
   useEffect(() => {
     // Initialize with new chat on mount
     createNewChat();
+
+    // Initialize speech recognition with English
+    recognitionRef.current = initializeSpeechRecognition("en-US");
+
+    return () => {
+      // Cleanup: stop listening when component unmounts
+      if (recognitionRef.current) {
+        stopListening(recognitionRef.current);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -83,6 +100,36 @@ export default function Chat() {
       }
     }, 300);
   }, []);
+
+  const handleMicrophone = () => {
+    if (isListening) {
+      stopListening(recognitionRef.current);
+      setIsListening(false);
+    } else {
+      setIsListening(true);
+      startListening(
+        {
+          onStart: () => {
+            setIsListening(true);
+            setError("");
+          },
+          onResult: (transcript) => {
+            setQuestion(transcript.trim());
+          },
+          onError: (errorMsg) => {
+            console.error("Speech recognition error:", errorMsg);
+            if (errorMsg !== "aborted") {
+              setError(`Voice input error: ${errorMsg}`);
+            }
+          },
+          onEnd: () => {
+            setIsListening(false);
+          },
+        },
+        recognitionRef.current
+      );
+    }
+  };
 
   const send = async (e) => {
     e.preventDefault();
@@ -306,12 +353,15 @@ export default function Chat() {
           </div>
         )}
 
-        {/* <div className="chat-disclaimer">
-          <span className="disclaimer-icon">⚕️</span>
-          <p>This AI assistant provides general health information only. Always consult a qualified healthcare professional for medical advice.</p>
-        </div> */}
-
         <form onSubmit={send} className="input-box">
+          <button
+            type="button"
+            onClick={handleMicrophone}
+            className={`mic-button ${isListening ? "listening" : ""}`}
+            title={isListening ? "Click to stop listening" : "Click to start voice input"}
+          >
+            <FaMicrophone />
+          </button>
           <input
             type="text"
             value={question}

@@ -1,5 +1,6 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from flask_session import Session
 from config import Config
 from extensions.jwt import jwt
 from routes.auth_routes import auth_bp
@@ -23,6 +24,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config.from_object(Config)
 logger.info(f"Configuration loaded: {Config.__name__}")
+
+# Initialize Flask-Session
+Session(app)
+logger.info("Flask-Session initialized")
 
 # Enable CORS with proper configuration for streaming
 CORS(app, resources={

@@ -147,7 +147,9 @@ const Sidebar = forwardRef(({ onLoadChat, onNewChat, onClear, onLogout, activeCh
                 }}
               >
                 <div className="chat-text">
-                  <p className="chat-title">{truncateText(chat.title)}</p>
+                  <div className="chat-title-row">
+                    <p className="chat-title">{truncateText(chat.title)}</p>
+                  </div>
                   {(chat.updatedAt || chat.createdAt) && (
                     <p className="chat-time">
                       {new Date(chat.updatedAt || chat.createdAt).toLocaleDateString("en-US", {

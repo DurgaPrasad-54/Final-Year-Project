@@ -1,4 +1,4 @@
-from flask import Blueprint, request, jsonify, Response
+from flask import Blueprint, request, jsonify, Response, session
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from models.chat_model import chats_collection
 from services.medchat_gemini import (
@@ -7,6 +7,12 @@ from services.medchat_gemini import (
     stream_medical_answer,
     get_static_response,
     Intent,
+)
+from services.emotion_detection import (
+    detect_emotion,
+    get_emotion_emoji,
+    is_strong_emotion,
+    get_empathetic_response,
 )
 from datetime import datetime
 import logging
@@ -18,8 +24,47 @@ chat_bp = Blueprint("chat", __name__, url_prefix="/chat")
 
 
 # =======================
+# SESSION MANAGEMENT HELPERS
+# =======================
+def initialize_session_history():
+    """Initialize session history on first chat"""
+    if "history" not in session:
+        session["history"] = []
+        session.modified = True
+        logger.debug("Initialized session history")
+
+
+def add_to_session_history(message):
+    """Add message to session history (keep last 20)"""
+    if "history" not in session:
+        session["history"] = []
+    
+    session["history"].append(message)
+    
+    # Keep only last 20 messages
+    if len(session["history"]) > 20:
+        session["history"] = session["history"][-20:]
+    
+    session.modified = True
+    logger.debug(f"Session history updated, total messages: {len(session['history'])}")
+
+
+def get_session_history_count():
+    """Get the current message count in session"""
+    return len(session.get("history", []))
+
+
+def clear_session_history():
+    """Clear all session history"""
+    session["history"] = []
+    session.modified = True
+    logger.debug("Session history cleared")
+
+
+# =======================
 # CREATE NEW CHAT
 # =======================
+
 @chat_bp.route("/new", methods=["POST"])
 @jwt_required()
 def new_chat():
@@ -28,6 +73,9 @@ def new_chat():
         user_id = get_jwt_identity()
         chat_id = str(uuid.uuid4())
         now = datetime.utcnow()
+        
+        # Initialize session history
+        initialize_session_history()
         
         chat_doc = {
             "userId": user_id,
@@ -80,6 +128,10 @@ def ask():
         intent = detect_intent(question)
         question_type = intent.value
         
+        # 1️⃣.5️⃣ Detect emotion from user input
+        emotion, confidence = detect_emotion(question)
+        emotion_emoji = get_emotion_emoji(emotion)
+        
         # 2️⃣ Get or create chat session
         if chat_id:
             chat = chats_collection.find_one({"userId": user_id, "chatId": chat_id})
@@ -97,14 +149,18 @@ def ask():
                 "createdAt": datetime.utcnow(),
                 "updatedAt": datetime.utcnow(),
                 "title": chat_title,
-                "totalMessages": 0
+                "totalMessages": 0,
+                "lastEmotion": emotion.value,
+                "lastEmotionEmoji": emotion_emoji
             }
             chats_collection.insert_one(chat_doc)
             chat = chat_doc
+            is_first_message = True
         else:
             chat_id = chat["chatId"]
+            is_first_message = chat.get("totalMessages", 0) == 0
             # Update title if it's still "New Chat" and this is first real message
-            if chat.get("title") == "New Chat" and chat.get("totalMessages", 0) == 0:
+            if chat.get("title") == "New Chat" and is_first_message:
                 new_title = question[:50] + "..." if len(question) > 50 else question
                 chats_collection.update_one(
                     {"userId": user_id, "chatId": chat_id},
@@ -126,27 +182,60 @@ def ask():
             if not answer or len(answer.strip()) < 5:
                 answer = "I understand you're asking about a health topic. Could you please provide more details or rephrase your question? I'm here to help with medical information."
 
-        # 4️⃣ Store messages in database
+        # 3️⃣.5️⃣ Prepend empathetic response if strong emotion detected on first message
+        if is_first_message and is_strong_emotion(emotion, confidence):
+            empathetic = get_empathetic_response(emotion)
+            answer = empathetic + answer
+
+        # Initialize session history
+        initialize_session_history()
+        
+        # 4️⃣ Store messages in database with emotion data
+        user_msg = {
+            "role": "user",
+            "content": question,
+            "timestamp": datetime.utcnow(),
+            "emotion": emotion.value,
+            "emotionEmoji": emotion_emoji,
+            "emotionConfidence": confidence
+        }
+        assistant_msg = {
+            "role": "assistant",
+            "content": answer,  # Store original English answer in DB
+            "timestamp": datetime.utcnow(),
+            "contextUsed": context_used
+        }
+        
         chats_collection.update_one(
             {"userId": user_id, "chatId": chat_id},
             {
-                "$push": {"messages": {"$each": [
-                    {"role": "user", "content": question, "timestamp": datetime.utcnow()},
-                    {"role": "assistant", "content": answer, "timestamp": datetime.utcnow(), "contextUsed": context_used}
-                ]}},
-                "$set": {"updatedAt": datetime.utcnow()},
+                "$push": {"messages": {"$each": [user_msg, assistant_msg]}},
+                "$set": {
+                    "updatedAt": datetime.utcnow(),
+                    "lastEmotion": emotion.value,
+                    "lastEmotionEmoji": emotion_emoji
+                },
                 "$inc": {"totalMessages": 2}
             }
         )
-
-        logger.info(f"Response generated for chat {chat_id} (type: {question_type})")
+        
+        # Add to session history
+        add_to_session_history({"role": "user", "content": question, "emotion": emotion.value, "emotionEmoji": emotion_emoji})
+        add_to_session_history({"role": "assistant", "content": answer})
+        
+        history_count = get_session_history_count()
+        logger.info(f"Response generated for chat {chat_id} (type: {question_type}, emotion: {emotion.value}, session_history: {history_count})")
 
         return jsonify({
             "answer": answer,
             "chatId": chat_id,
             "timestamp": datetime.utcnow().isoformat(),
             "contextUsed": context_used,
-            "questionType": question_type
+            "questionType": question_type,
+            "emotion": emotion.value,
+            "emotionEmoji": emotion_emoji,
+            "emotionConfidence": confidence,
+            "history_count": history_count
         }), 200
 
     except Exception as e:
@@ -236,7 +325,9 @@ def list_chats():
                 "title": 1,
                 "createdAt": 1,
                 "updatedAt": 1,
-                "totalMessages": 1
+                "totalMessages": 1,
+                "lastEmotion": 1,
+                "lastEmotionEmoji": 1
             }
         ).sort("updatedAt", -1).limit(limit))  # Sort by most recently updated
         
@@ -343,6 +434,28 @@ def clear_all():
 
 
 # =======================
+# CLEAR SESSION HISTORY
+# =======================
+@chat_bp.route("/clear", methods=["POST"])
+@jwt_required()
+def clear_session():
+    """Clear session conversation history (last 20 messages)"""
+    try:
+        user_id = get_jwt_identity()
+        clear_session_history()
+        
+        logger.info(f"Cleared session history for user {user_id}")
+        return jsonify({
+            "message": "Session history cleared",
+            "history_count": 0
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error clearing session history: {str(e)}")
+        return jsonify({"error": "Failed to clear session history"}), 500
+
+
+# =======================
 # STREAMING CHAT ENDPOINT (Like ChatGPT/Claude)
 # =======================
 @chat_bp.route("/stream", methods=["POST"])
@@ -358,12 +471,19 @@ def stream_chat():
         if not question:
             return jsonify({"error": "Question is required"}), 400
 
+        # Detect emotion
+        emotion, confidence = detect_emotion(question)
+        emotion_emoji = get_emotion_emoji(emotion)
+
         # Check intent type
         intent = detect_intent(question)
         
         # Handle greetings and non-medical questions without streaming
         if intent != Intent.MEDICAL:
             answer = get_static_response(intent)
+            
+            # Initialize session history
+            initialize_session_history()
             
             # Save to database
             if chat_id:
@@ -373,18 +493,38 @@ def stream_chat():
                         {"userId": user_id, "chatId": chat_id},
                         {
                             "$push": {"messages": {"$each": [
-                                {"role": "user", "content": question, "timestamp": datetime.utcnow()},
-                                {"role": "assistant", "content": answer, "timestamp": datetime.utcnow()}
+                                {
+                                    "role": "user",
+                                    "content": question,
+                                    "timestamp": datetime.utcnow(),
+                                    "emotion": emotion.value,
+                                    "emotionEmoji": emotion_emoji,
+                                    "emotionConfidence": confidence
+                                },
+                                {"role": "assistant", "content": answer, "timestamp": datetime.utcnow()}  # Store original
                             ]}},
-                            "$set": {"updatedAt": datetime.utcnow()},
+                            "$set": {
+                                "updatedAt": datetime.utcnow(),
+                                "lastEmotion": emotion.value,
+                                "lastEmotionEmoji": emotion_emoji
+                            },
                             "$inc": {"totalMessages": 2}
                         }
                     )
             
+            # Add to session history
+            add_to_session_history({"role": "user", "content": question, "emotion": emotion.value, "emotionEmoji": emotion_emoji})
+            add_to_session_history({"role": "assistant", "content": answer})
+            history_count = get_session_history_count()
+            
             return jsonify({
                 "answer": answer,
                 "chatId": chat_id,
-                "intent": intent.value
+                "intent": intent.value,
+                "emotion": emotion.value,
+                "emotionEmoji": emotion_emoji,
+                "emotionConfidence": confidence,
+                "history_count": history_count
             }), 200
 
         # Get or create chat session
@@ -402,12 +542,16 @@ def stream_chat():
                 "createdAt": datetime.utcnow(),
                 "updatedAt": datetime.utcnow(),
                 "title": question[:50] + "..." if len(question) > 50 else question,
-                "totalMessages": 0
+                "totalMessages": 0,
+                "lastEmotion": emotion.value,
+                "lastEmotionEmoji": emotion_emoji
             }
             chats_collection.insert_one(chat_doc)
             chat = chat_doc
+            is_first_message = True
         else:
             chat_id = chat["chatId"]
+            is_first_message = chat.get("totalMessages", 0) == 0
             # Update title if still "New Chat"
             if chat.get("title") == "New Chat":
                 chats_collection.update_one(
@@ -419,6 +563,13 @@ def stream_chat():
             """Generator for Server-Sent Events"""
             full_response = ""
             try:
+                # Prepend empathetic response if strong emotion on first message
+                if is_first_message and is_strong_emotion(emotion, confidence):
+                    empathetic = get_empathetic_response(emotion)
+                    full_response = empathetic
+                    # Yield the empathetic part first
+                    yield f"data: {json.dumps({'token': empathetic})}\n\n"
+                
                 for chunk in stream_medical_answer(question):
                     # Parse the SSE data to extract token
                     if chunk.startswith("data: "):
@@ -432,17 +583,35 @@ def stream_chat():
                 
                 # After streaming is done, save to database
                 if full_response:
+                    # Initialize session history
+                    initialize_session_history()
+                    
                     chats_collection.update_one(
                         {"userId": user_id, "chatId": chat_id},
                         {
                             "$push": {"messages": {"$each": [
-                                {"role": "user", "content": question, "timestamp": datetime.utcnow()},
+                                {
+                                    "role": "user",
+                                    "content": question,
+                                    "timestamp": datetime.utcnow(),
+                                    "emotion": emotion.value,
+                                    "emotionEmoji": emotion_emoji,
+                                    "emotionConfidence": confidence
+                                },
                                 {"role": "assistant", "content": full_response, "timestamp": datetime.utcnow()}
                             ]}},
-                            "$set": {"updatedAt": datetime.utcnow()},
+                            "$set": {
+                                "updatedAt": datetime.utcnow(),
+                                "lastEmotion": emotion.value,
+                                "lastEmotionEmoji": emotion_emoji
+                            },
                             "$inc": {"totalMessages": 2}
                         }
                     )
+                    
+                    # Add to session history
+                    add_to_session_history({"role": "user", "content": question, "emotion": emotion.value, "emotionEmoji": emotion_emoji})
+                    add_to_session_history({"role": "assistant", "content": full_response})
                     
             except Exception as stream_error:
                 logger.error(f"Streaming error: {stream_error}")

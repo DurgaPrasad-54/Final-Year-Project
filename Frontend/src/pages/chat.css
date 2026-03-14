@@ -326,10 +326,27 @@
   gap: 12px;
 }
 
+.message-sender-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .message-sender {
   font-size: 12px;
   font-weight: 600;
   opacity: 0.8;
+}
+
+.message-emotion {
+  font-size: 13px;
+  margin-left: 4px;
+  cursor: help;
+  transition: transform 0.2s ease;
+}
+
+.message-emotion:hover {
+  transform: scale(1.2);
 }
 
 .message-actions {
@@ -688,6 +705,98 @@
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
+}
+
+/* ===== MICROPHONE BUTTON ===== */
+.mic-button {
+  padding: 12px 16px;
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 15px;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 48px;
+  font-weight: 500;
+  box-shadow: none;
+}
+
+[data-theme="dark"] .mic-button {
+  background: #1a2332;
+  border-color: rgba(31, 41, 55, 0.3);
+  color: var(--text-primary);
+}
+
+.mic-button:hover:not(.listening) {
+  border-color: var(--accent-primary);
+  background: var(--bg-primary);
+}
+
+.mic-button:active:not(.listening) {
+  opacity: 0.95;
+}
+
+/* Listening state - RED */
+.mic-button.listening {
+  background: #ef4444;
+  color: white;
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+  animation: pulse-red 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse-red {
+  0% {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.15);
+  }
+  100% {
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+  }
+}
+
+/* ===== SPEAKER BUTTON ===== */
+.speak-btn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+  font-size: 13px;
+}
+
+.speak-btn:hover {
+  background: var(--border-color);
+  color: var(--accent-primary);
+}
+
+.speak-btn.speaking {
+  color: var(--accent-primary);
+  animation: speak-pulse 1s ease-in-out infinite;
+}
+
+@keyframes speak-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.speak-btn:active {
+  transform: scale(0.95);
 }
 
 /* ===== MOBILE RESPONSIVE ===== */

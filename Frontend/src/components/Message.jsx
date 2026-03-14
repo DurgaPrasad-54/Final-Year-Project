@@ -1,9 +1,12 @@
-import { FaStethoscope, FaUser, FaCopy, FaCheck } from "react-icons/fa";
-import { useState } from "react";
+import { FaStethoscope, FaUser, FaCopy, FaCheck, FaVolumeUp } from "react-icons/fa";
+import { useState, useRef } from "react";
 import ReactMarkdown from "react-markdown";
+import { speakText, stopSpeaking } from "../utils/voiceUtils";
 
 export default function Message({ msg }) {
   const [copied, setCopied] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const utteranceRef = useRef(null);
   const isUser = msg.role === "user";
 
   const formatTime = (timestamp) => {
@@ -25,6 +28,20 @@ export default function Message({ msg }) {
     }
   };
 
+  const handleSpeak = () => {
+    if (isSpeaking) {
+      stopSpeaking();
+      setIsSpeaking(false);
+      utteranceRef.current = null;
+    } else {
+      setIsSpeaking(true);
+      utteranceRef.current = speakText(msg.content, "en-US", () => {
+        setIsSpeaking(false);
+        utteranceRef.current = null;
+      });
+    }
+  };
+
   return (
     <div className={`message ${isUser ? "user-message" : "assistant-message"}`}>
       <div className="message-avatar">
@@ -32,19 +49,30 @@ export default function Message({ msg }) {
       </div>
       <div className="message-bubble">
         <div className="message-header">
-          <span className="message-sender">{isUser ? "You" : "MedChat AI"}</span>
+          <div className="message-sender-row">
+            <span className="message-sender">{isUser ? "You" : "MedChat AI"}</span>
+          </div>
           <div className="message-actions">
             {msg.timestamp && (
               <span className="message-time">{formatTime(msg.timestamp)}</span>
             )}
             {!isUser && (
-              <button 
-                className="copy-btn" 
-                onClick={copyToClipboard}
-                title={copied ? "Copied!" : "Copy response"}
-              >
-                {copied ? <FaCheck className="copied" /> : <FaCopy />}
-              </button>
+              <>
+                <button 
+                  className={`speak-btn ${isSpeaking ? "speaking" : ""}`}
+                  onClick={handleSpeak}
+                  title={isSpeaking ? "Stop playing" : "Play response"}
+                >
+                  <FaVolumeUp />
+                </button>
+                <button 
+                  className="copy-btn" 
+                  onClick={copyToClipboard}
+                  title={copied ? "Copied!" : "Copy response"}
+                >
+                  {copied ? <FaCheck className="copied" /> : <FaCopy />}
+                </button>
+              </>
             )}
           </div>
         </div>
