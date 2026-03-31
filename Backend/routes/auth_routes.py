@@ -89,20 +89,30 @@ def login():
 
         # Validation
         if not email:
+            logger.warning("Login attempt with no email")
             return jsonify({"error": "Email is required"}), 400
 
         if not password:
+            logger.warning(f"Login attempt for {email} with no password")
             return jsonify({"error": "Password is required"}), 400
 
         # Find user
         user = users_collection.find_one({"email": email})
 
-        if not user or not verify_password(password, user["password"]):
-            logger.warning(f"Failed login attempt for {email}")
+        if not user:
+            logger.warning(f"Failed login attempt for {email} - user not found")
+            return jsonify({"error": "Invalid email or password"}), 401
+
+        # Verify password with detailed error logging
+        password_valid = verify_password(password, user.get("password", ""))
+        if not password_valid:
+            logger.warning(f"Failed login attempt for {email} - invalid password")
+            logger.debug(f"Password verification failed for user: {email}")
             return jsonify({"error": "Invalid email or password"}), 401
 
         # Check if user is active
         if not user.get("isActive", True):
+            logger.warning(f"Login attempt for inactive user: {email}")
             return jsonify({"error": "Account is inactive"}), 403
 
         # Create JWT token
@@ -114,7 +124,7 @@ def login():
             {"$set": {"lastLogin": datetime.utcnow()}}
         )
 
-        logger.info(f"User logged in: {email}")
+        logger.info(f"User successfully logged in: {email}")
 
         return jsonify({
             "message": "Login successful",
@@ -127,7 +137,7 @@ def login():
         }), 200
 
     except Exception as e:
-        logger.error(f"Error during login: {str(e)}")
+        logger.error(f"Error during login: {str(e)}", exc_info=True)
         return jsonify({
             "error": "Login failed",
             "message": str(e)
