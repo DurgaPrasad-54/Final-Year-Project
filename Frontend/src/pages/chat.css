@@ -809,6 +809,14 @@
 @media (max-width: 768px) {
   .chat-layout {
     flex-direction: column;
+    height: 100vh;
+  }
+
+  .chat-main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
   }
 
   .message-bubble {
@@ -817,6 +825,7 @@
 
   .chat-header {
     padding: 16px 20px;
+    flex-shrink: 0;
   }
 
   .chat-header h1 {
@@ -826,12 +835,16 @@
   .messages-container {
     padding: 16px;
     gap: 12px;
+    margin-bottom: 130px;
+    flex: 1;
+    overflow-y: auto;
   }
 
   .chat-disclaimer {
     padding: 10px 16px;
     font-size: 11px;
     gap: 8px;
+    flex-shrink: 0;
   }
 
   .chat-disclaimer .disclaimer-icon {
@@ -841,6 +854,14 @@
   .input-box {
     padding: 14px 16px;
     gap: 10px;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    width: 100%;
+    box-sizing: border-box;
+    flex-shrink: 0;
   }
 
   .input-box input {
@@ -910,5 +931,37 @@
 
   .chat-header p {
     font-size: 11px;
+  }
+
+  .messages-container {
+    margin-bottom: 140px;
+    padding: 12px;
+  }
+
+  .input-box {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 100;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px;
+    gap: 8px;
+  }
+
+  .input-box input {
+    padding: 12px 14px;
+    font-size: 14px;
+  }
+
+  .send-button {
+    padding: 12px 16px;
+    min-width: 44px;
+  }
+
+  .mic-button {
+    padding: 12px 14px;
+    min-width: 44px;
   }
 }
