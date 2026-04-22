@@ -45,9 +45,12 @@ def get_groq_client() -> Groq:
     if _client:
         return _client
     
-    api_key = os.getenv("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("❌ GROQ_API_KEY not found. Get free key at https://console.groq.com/keys")
+    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    if not api_key or api_key == "your_groq_api_key_here":
+        raise RuntimeError(
+            " GROQ_API_KEY not configured properly.\n"
+            "Add your API key to .env file. Get free key at https://console.groq.com/keys"
+        )
     
     logger.info(f"Initializing Groq client with model: {GROQ_MODEL}")
     _client = Groq(api_key=api_key)
@@ -185,7 +188,16 @@ def get_static_response(intent: Intent) -> str:
 
 def build_system_prompt(rag_context: str = "") -> str:
     base_prompt = (
-        "You are MedChat AI, a professional medical information assistant.\n\n"
+        "You are MedChat AI, a professional medical information assistant specialized in HEALTH TOPICS ONLY.\n\n"
+        "CRITICAL RULE: You ONLY answer questions about:\n"
+        "- Medical conditions, diseases, and symptoms\n"
+        "- Healthcare treatments and therapies\n"
+        "- Health advice, wellness, and prevention\n"
+        "- Body parts and medical anatomy\n"
+        "- Mental health and psychological topics\n"
+        "- Medications and medical procedures\n\n"
+        "If the user asks about non-medical topics (politics, sports, entertainment, technology, etc.), "
+        "respond ONLY with: 'I specialize in medical topics only. Please ask a health-related question.'\n\n"
     )
     
     # Add RAG context if available
@@ -217,12 +229,13 @@ def build_system_prompt(rag_context: str = "") -> str:
         "Brief guidance.\n\n"
         "*Disclaimer: Consult a healthcare provider for personalized advice.*\n\n"
         "CONTENT RULES:\n"
-        "1. Provide accurate, educational medical information\n"
+        "1. Provide accurate, educational medical information only\n"
         "2. Do NOT diagnose specific conditions\n"
         "3. Do NOT prescribe medications or dosages\n"
         "4. Include when to seek professional help\n"
         "5. End with a brief disclaimer when appropriate\n"
         "6. Be empathetic and professional in tone\n"
+        "7. NEVER answer non-medical questions\n"
     )
     
     return base_prompt
@@ -232,6 +245,47 @@ def build_system_prompt(rag_context: str = "") -> str:
 # MEDICAL ANSWER GENERATION
 # =========================================================
 
+def validate_medical_question(question: str) -> bool:
+    """
+    Validates if a question is actually medical-related.
+    Returns True if medical, False if likely non-medical.
+    """
+    q = question.lower().strip()
+    
+    # List of common non-medical topics
+    non_medical_keywords = [
+        "sports", "football", "soccer", "basketball", "baseball", "cricket",
+        "movie", "films", "tv show", "series", "music", "artist", "singer",
+        "politics", "election", "government", "president", "congress",
+        "stock", "stocks", "bitcoin", "crypto", "investment", "money",
+        "technology", "gadget", "phone", "computer", "software", "programming",
+        "recipe", "cooking", "food", "restaurant", "cuisine",
+        "car", "automobile", "vehicle", "engine",
+        "weather", "rainfall", "snow", "climate",
+        "travel", "vacation", "tourism", "hotel",
+        "gaming", "game", "video game", "console", "player",
+        "book", "novel", "author", "writer", "literature",
+        "fashion", "clothes", "designer", "brand",
+        "sports", "athlete",
+    ]
+    
+    # If the question contains non-medical keywords and no medical keywords
+    has_non_medical = any(kw in q for kw in non_medical_keywords)
+    
+    medical_triggers = (
+        "pain", "symptom", "sick", "disease", "health", "doctor", "hospital",
+        "treatment", "medicine", "drug", "therapy", "disorder", "condition",
+        "fever", "cough", "fatigue", "anxiety", "depression", "mental health"
+    )
+    has_medical = any(m in q for m in medical_triggers)
+    
+    # If has strong non-medical signal and no medical keywords, reject
+    if has_non_medical and not has_medical:
+        return False
+    
+    return True
+
+
 def generate_medical_answer(
     question: str,
     history: Optional[List[Dict]] = None,
@@ -239,6 +293,10 @@ def generate_medical_answer(
 ) -> str:
     """Generate medical answer using Groq with RAG context"""
     try:
+        # First, validate if this is a medical question
+        if not validate_medical_question(question):
+            return get_static_response(Intent.REJECT)
+        
         client = get_groq_client()
         start = time.time()
         

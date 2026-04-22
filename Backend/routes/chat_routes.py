@@ -163,6 +163,12 @@ def ask():
 
         if len(question) < 2:
             return jsonify({"error": "Question must be at least 2 characters"}), 400
+        
+        if len(question) > 2000:
+            return jsonify({"error": "Question is too long (max 2000 characters)"}), 400
+
+        # Sanitize input - remove potential injection
+        question = question.replace('\x00', '').replace('\n\n\n', '\n\n')
 
         logger.info(f"[ASK] User: {user_id_str}, Chat: {chat_id}, Question: {question[:50]}")
 
